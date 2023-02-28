@@ -1,0 +1,447 @@
+---
+title: 'Homework # 1 '
+author: "Al Haque"
+date: "2023-02-20"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Introduction
+
+
+### (Data Exploration):
+
+The training dataset contains seventeen columns and two thousand seventy six observations about a professional baseball team throughout the years of 1871 to 2006
+
+```{r}
+## Step 1 call in your libraries and import the data from csv and read it into R
+library(tidyverse)
+library(reshape2)
+library(corrplot)
+training <- read.csv('https://raw.githubusercontent.com/AldataSci/Baseball-Data/main/moneyball-training-data.csv')
+```
+
+Looking at the structure of the dataset we can see they are all integer columns and one of the columns TEAM_BATTING_HBP contains a lot of NA values for the head of the data.. 
+
+```{r}
+str(training)
+```
+
+A quick glance at the summary statistics of the column.
+
+```{r}
+## OK one of the columns has over 2,085 missing values out of 2276 of its columns..
+## TEAM_BATTING_HBP which is the column for Batters hit by pitch (may have to remove this column..)
+summary(training)
+```
+
+We can see that HBP contains 2085 missing values followed by TEAM_BASERUN_CS so I may have to omit those columns from the dataset. 
+
+```{r}
+## Easier to see all the missing values
+sapply(training,function(x) sum(is.na(x)))
+```
+
+
+From the boxplot the column of TEAM_PITCHING_H has a lot of outliers, I may consider removing this column from the model in order to not sway it. 
+
+```{r,warning=FALSE}
+## Let's try the ggplot method and melt-method..
+data_long <- melt(training)
+
+##plot boxplot with ggplot.. ## there are a lot of outliers in TEAM_PITCHING_H
+gg <- ggplot(data_long,aes(x=variable,y=value,fill = "red")) + geom_boxplot() + coord_flip() + xlab("Columns")
+gg
+```
+
+```{r,warning=FALSE}
+gg + coord_cartesian(ylim = c(0,2000)) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+```{r}
+data_gathered <- training %>%
+  gather(variable,value) 
+```
+
+
+The histograms have various distribution but the predictor variable TARGET_WINS is normally distributed but some of the others are skewed like TEAM_FIELDING_E and etc.
+
+```{r,warning=FALSE}
+## each panel can have its own scale when we use scale = "Free" 
+histograms <- ggplot(data_gathered,aes(x=value)) + geom_histogram() +
+  facet_wrap(~variable,scale="free")
+histograms
+```
+
+The correlation matrix shows a lot of question marks which shows missing data in the columns,
+
+
+```{r}
+## Let's create a correlation matrix with our data.. 
+sum(is.na(training))
+
+## there are a lot of missing data in these columns... i'm gonna have to remove some of those columns..
+corrplot(cor(training))
+```
+
+--------
+
+## Part II Data Preparation:
+
+### Removal of NA values 
+I've removed the columns of HBP and CS since they contained a lot of missing values
+
+```{r}
+## Cleaning the data and imputating some of the data.. i'm going to remove columns TEAM_BATTING_HBP and TEAM_BASERUN_CS since they have a lot of missing data and I will imputate the rest of the data with columns..  those 2 columns are basically batters caught stealing and batters hit by pitch which rarely happened in those cases... 
+
+Training <- training %>%
+  dplyr::select(-c(TEAM_BATTING_HBP,TEAM_BASERUN_CS))
+```
+
+
+```{r}
+sapply(Training,function(x) sum(is.na(x)))
+```
+
+### Imputation using MICE
+
+I am going to try imputing the missing values with the MICE package and I will use predictive mean matching, cart: Classification and regression trees and lasso linear regression and for each I will see which imputation method closely resembles the distribution of the normal data and choose that method to impute the missing values. 
+
+
+```{r}
+## Now I will imputate the data with the mice package.. 
+library(mice)
+mice_imputed <- data.frame(
+original = Training$TEAM_FIELDING_DP,
+imp_pmm = complete(mice(Training,method ="pmm"))$TEAM_FIELDING_DP,
+imp_cart = complete(mice(Training,method ="cart"))$TEAM_FIELDING_DP,
+imp_lasso = complete(mice(Training,method ="lasso.norm"))$TEAM_FIELDING_DP
+)
+head(mice_imputed)
+
+```
+
+I am going to compare the distribution of the original and then figure which distribution resembles the original.
+
+```{r}
+## compare the distribution between each imputation and see which one resembles the original the most..
+## I think the imp_cart looks smiliar to the original histogram so I will use those values.
+par(mfrow=c(2,2))
+hist(mice_imputed$original)
+hist(mice_imputed$imp_pmm)
+hist(mice_imputed$imp_cart)
+hist(mice_imputed$imp_lasso)
+```
+```{r}
+## replace the values with the imputed values..
+Training$TEAM_FIELDING_DP <- mice_imputed$imp_cart
+```
+
+
+```{r}
+## now I will imputate the rest of the columns with the same method..
+sapply(Training,function(x) sum(is.na(x)))
+```
+
+```{r}
+## i will imputate the TEAM_BASERUN_SB which is stolen bases..
+mice_imputed2 <- data.frame(
+original = Training$TEAM_BASERUN_SB,
+imp_pmm = complete(mice(Training,method ="pmm"))$TEAM_BASERUN_SB,
+imp_cart = complete(mice(Training,method ="cart"))$TEAM_BASERUN_SB,
+imp_lasso = complete(mice(Training,method ="lasso.norm"))$TEAM_BASERUN_SB
+)
+head(mice_imputed2)
+```
+
+```{r}
+## I will impute that value with imp_cart since they resemble the original histogram..
+par(mfrow=c(2,2))
+hist(mice_imputed2$original)
+hist(mice_imputed2$imp_pmm)
+hist(mice_imputed2$imp_cart)
+hist(mice_imputed2$imp_lasso)
+```
+
+```{r}
+## imputate BASERUN_SB with this value since the distributions looks smiliar 
+Training$TEAM_BASERUN_SB <- mice_imputed2$imp_pmm
+```
+
+
+```{r}
+## looking at the empty values again I think i should be fine with it this time.. 
+sapply(Training,function(x) sum(is.na(x)))
+```
+```{r}
+## now I want to look at the correlation matrix again and see if I can gleam any valuable information..
+Training <- na.omit(Training)
+
+corrplot(cor(Training),method = "color")
+```
+
+-------
+
+## Part III (Model-Creation)    
+
+```{r}
+## I am going to split the training data set into training and testing datasets...
+## 70% in Training and 30% in Testing..
+library(caret)
+set.seed(123)
+index <- createDataPartition(Training$TARGET_WINS,p=0.7,list = FALSE)
+
+Ttraining <- Training[index,]
+Ttest <- Training[-index,]
+```
+
+### Model I (All the Predictors minus the Index)
+
+```{r}
+## It went up only a little bit.. but that's fine.. 
+mod1 <- lm(TARGET_WINS ~ .-INDEX,data=Ttraining)
+summary(mod1)
+```
+
+
+### Model II (Getting rid of the not signficant variables)
+
+```{r}
+## I will get rid of the not so signficant variables so TEAM_PITCHING_HR and TEAM_PITCHING_BB and the R squared has gone up a few values.. since they are signficant I will look at the diagnostics.. 
+mod2 <- lm(TARGET_WINS ~ .-INDEX-TEAM_PITCHING_H-TEAM_PITCHING_HR-TEAM_PITCHING_BB,data=Ttraining)
+summary(mod2)
+```
+
+```{r}
+plot(fitted(mod2),residuals(mod2),xlab="Fitted",ylab="Residuals")
+```
+```{r}
+## attempt a box-cox transformation..
+Ttraining <- Ttraining %>%
+  filter(TARGET_WINS != 0)
+Ttest <- Ttest %>%
+  filter(TARGET_WINS != 0)
+```
+```{r}
+library(MASS)
+set.seed(123)
+bcox <-boxcox(mod2,plotit = T)
+
+val <- cbind(bcox$x,bcox$y)
+
+## sort the values in ascending-order.. our lambda value is 1.1919 that maxmizes the log-likelihood of the transformed data
+head(val[order(-bcox$y),])
+
+```
+
+### Model III (Box-Cox Transformation)
+
+```{r}
+## Let use the lambda value on our model to see if it improves the model even if its a little bit.
+bmod3 <- lm(TARGET_WINS ^(1.3536) ~ .-INDEX-TEAM_PITCHING_H-TEAM_PITCHING_HR-TEAM_PITCHING_BB,data=Ttraining)
+summary(bmod3)
+```
+```{r}
+## it looks a bit better
+plot(fitted(mod2),residuals(mod2),xlab="Fitted",ylab="Residuals")
+plot(fitted(bmod3),residuals(bmod3),xlab="Fitted",ylab="Residuals")
+```
+
+### Model Four (Removing the less signficant variables..)
+
+```{r}
+## This looks good I think, I removed the other least signficant variables.. 
+bmod4 <- lm(TARGET_WINS ^(1.3536) ~ .-INDEX-TEAM_PITCHING_H-TEAM_PITCHING_HR-TEAM_PITCHING_BB-TEAM_BATTING_3B,data=Training)
+summary(bmod4)
+```
+
+### Model Five (Removing the more of the less signficant variables..)
+
+
+```{r}
+## Here I removed the least signficant variables and I'm curious now.. 
+bmod5 <- lm(TARGET_WINS ^(1.3536) ~ .-INDEX-TEAM_PITCHING_H-TEAM_PITCHING_HR-TEAM_PITCHING_BB-TEAM_BATTING_3B-TEAM_BATTING_2B-TEAM_PITCHING_SO,data=Training)
+summary(bmod5)
+```
+
+### Looking at the diagnostics 
+I think the model fits all the assumptions but with some outliers here and there in the cook's distance chart.
+
+```{r}
+
+par(mfrow=c(2,2))
+plot(bmod5)
+
+```
+
+## (Part IV) Model selection.. (using RMSE)
+  I have calculated the Root Mean Squared Error in this section and I've compared against the model I've found interesting. I choose bmod4 because it had the lowest rmse then the others. 
+
+```{r}
+
+## I will then use mod,mod2,bmod4 and compare each rmse
+
+## import the caret library..
+
+library(caret)
+
+predictions_1 <- predict(mod1,Ttest)
+head(predictions_1)
+
+rmse <- RMSE(predictions_1,Ttest$TARGET_WINS)
+rmse
+
+```
+
+```{r}
+## create the next predictions with mod4
+
+predictions_2 <- predict(mod2,Ttest)
+head(predictions_2)
+
+
+rmse2 <- RMSE(predictions_2,Ttest$TARGET_WINS)
+rmse2
+```
+
+```{r}
+## make sure to inverse the box-cox transformation 
+predictions_3 <- predict(bmod4,Ttest)
+
+## make sure to inverse the box-cox transformation
+inv_box_pred <- predictions_3 ^(1/1.3536)
+rmse3 <- RMSE(inv_box_pred,Ttest$TARGET_WINS)
+head(inv_box_pred)
+rmse3
+```
+
+```{r}
+predictions_4 <- predict(bmod5,Ttest)
+
+## make sure to inverse the box-cox transformation
+inv_box_pred2 <- predictions_4 ^(1/1.3536)
+rmse4 <- RMSE(inv_box_pred2,Ttest$TARGET_WINS)
+head(inv_box_pred)
+rmse4
+
+```
+
+
+
+--------
+
+## Cleaning The testing dataset
+I went to clean the testing dataset in a manner smiliar to the way I have cleaned the training dataset in which I deleted the empty columns and imputate some others and omitted the rest. 
+
+
+```{r}
+## Will predict values with mod4,mod5,and mod6.. 
+Test <- read.csv("https://raw.githubusercontent.com/AldataSci/Baseball-Data/main/moneyball-evaluation-data.csv")
+
+## before I do that I have to clean the test data for the linear regression model.. I will clean it in a manner that will resemble the training set
+
+str(Test)
+
+
+## remove the HBP column again and imputate the 
+sapply(Test,function(x) sum(is.na(x)))
+
+```
+
+```{r}
+## remove hbp and Cs
+Test <- Test %>%
+  dplyr::select(-c(TEAM_BATTING_HBP,TEAM_BASERUN_CS))
+```
+
+```{r}
+sapply(Test,function(x) sum(is.na(x)))
+
+## now we imputate..
+
+library(mice)
+mice_imputed3 <- data.frame(
+original = Test$TEAM_FIELDING_DP,
+imp_pmm = complete(mice(Test,method ="pmm"))$TEAM_FIELDING_DP,
+imp_cart = complete(mice(Test,method ="cart"))$TEAM_FIELDING_DP,
+imp_lasso = complete(mice(Test,method ="lasso.norm"))$TEAM_FIELDING_DP
+)
+head(mice_imputed3)
+```
+
+```{r}
+par(mfrow=c(2,2))
+hist(mice_imputed3$original)
+hist(mice_imputed3$imp_pmm)
+hist(mice_imputed3$imp_cart)
+hist(mice_imputed3$imp_lasso)
+```
+```{r}
+## Since the imp_cart looks smiliar to the original distribution I will use that then..
+
+Test$TEAM_FIELDING_DP <- mice_imputed3$imp_cart
+```
+
+
+```{r}
+## now we imputate the next column.. which is BASERUN_SB
+
+mice_imputed4 <- data.frame(
+original = Test$TEAM_BASERUN_SB,
+imp_pmm = complete(mice(Test,method ="pmm"))$TEAM_BASERUN_SB,
+imp_cart = complete(mice(Test,method ="cart"))$TEAM_BASERUN_SB,
+imp_lasso = complete(mice(Test,method ="lasso.norm"))$TEAM_BASERUN_SB
+)
+head(mice_imputed4)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+hist(mice_imputed4$original)
+hist(mice_imputed4$imp_pmm)
+hist(mice_imputed4$imp_cart)
+hist(mice_imputed4$imp_lasso)
+```
+```{r}
+## I will use imp_pmm again and replace those columns with those imputated values.. 
+Test$TEAM_BASERUN_SB <- mice_imputed4$imp_pmm
+```
+
+
+```{r}
+sapply(Test,function(x) sum(is.na(x)))
+```
+
+```{r}
+## Then I will remove some of the columns since I had imputated most of the columns..
+
+Testt <- na.omit(Test)
+
+
+sapply(Testt,function(x) sum(is.na(Testt)))
+```
+
+-------- 
+
+## Creating predictions with the cleaned Test Data..
+  Finally, I used the model and I created predictions with the test dataset.
+
+```{r}
+set.seed(123)
+pred <- predict(bmod5,newdata=Testt)
+
+
+## I have to revert the transformation back.. 
+actual_predictions <- pred ^ (1/1.3536)
+
+actual_predictions
+
+## And that is all!! done... 
+
+
+```
+
